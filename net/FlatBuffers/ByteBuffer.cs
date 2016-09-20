@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright 2014 Google Inc. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,18 +14,27 @@
  * limitations under the License.
  */
 
-//#define UNSAFE_BYTEBUFFER  // uncomment this line to use faster ByteBuffer
+// There are 2 #defines that have an impact on performance of this ByteBuffer implementation
+//
+//      UNSAFE_BYTEBUFFER 
+//          This will use unsafe code to manipulate the underlying byte array. This
+//          can yield a reasonable performance increase.
+//
+//      BYTEBUFFER_NO_BOUNDS_CHECK
+//          This will disable the bounds check asserts to the byte array. This can
+//          yield a small performance gain in normal code..
+//
+// Using UNSAFE_BYTEBUFFER and BYTEBUFFER_NO_BOUNDS_CHECK together can yield a
+// performance gain of ~15% for some operations, however doing so is potentially 
+// dangerous. Do so at your own risk!
+//
 
 using System;
-using System.Linq;
 
 namespace FlatBuffers
 {
     /// <summary>
     /// Class to mimic Java's ByteBuffer which is used heavily in Flatbuffers.
-    /// If your execution environment allows unsafe code, you should enable
-    /// unsafe code in your project and #define UNSAFE_BYTEBUFFER to use a
-    /// MUCH faster version of ByteBuffer.
     /// </summary>
     public class ByteBuffer
     {
@@ -36,13 +45,23 @@ namespace FlatBuffers
 
         public byte[] Data { get { return _buffer; } }
 
-        public ByteBuffer(byte[] buffer)
+        public ByteBuffer(byte[] buffer) : this(buffer, 0) { }
+
+        public ByteBuffer(byte[] buffer, int pos)
         {
             _buffer = buffer;
-            _pos = 0;
+            _pos = pos;
         }
 
-        public int position() { return _pos; }
+        public int Position {
+            get { return _pos; }
+            set { _pos = value; }
+        }
+
+        public void Reset()
+        {
+            _pos = 0;
+        }
 
         // Pre-allocated helper arrays for convertion.
         private float[] floathelper = new[] { 0.0f };
@@ -93,7 +112,6 @@ namespace FlatBuffers
                     _buffer[offset + count - 1 - i] = (byte)(data >> i * 8);
                 }
             }
-            _pos = offset;
         }
 
         protected ulong ReadLittleEndian(int offset, int count)
@@ -118,26 +136,39 @@ namespace FlatBuffers
         }
 #endif // !UNSAFE_BYTEBUFFER
 
+
         private void AssertOffsetAndLength(int offset, int length)
         {
+            #if !BYTEBUFFER_NO_BOUNDS_CHECK
             if (offset < 0 ||
-                offset >= _buffer.Length ||
-                offset + length > _buffer.Length)
+                offset > _buffer.Length - length)
                 throw new ArgumentOutOfRangeException();
+            #endif
         }
 
         public void PutSbyte(int offset, sbyte value)
         {
             AssertOffsetAndLength(offset, sizeof(sbyte));
             _buffer[offset] = (byte)value;
-            _pos = offset;
         }
 
         public void PutByte(int offset, byte value)
         {
             AssertOffsetAndLength(offset, sizeof(byte));
             _buffer[offset] = value;
-            _pos = offset;
+        }
+
+        public void PutByte(int offset, byte value, int count)
+        {
+            AssertOffsetAndLength(offset, sizeof(byte) * count);
+            for (var i = 0; i < count; ++i)
+                _buffer[offset + i] = value;
+        }
+
+        // this method exists in order to conform with Java ByteBuffer standards
+        public void Put(int offset, byte value)
+        {
+            PutByte(offset, value);
         }
 
 #if UNSAFE_BYTEBUFFER
@@ -156,7 +187,6 @@ namespace FlatBuffers
                     ? value
                     : ReverseBytes(value);
             }
-            _pos = offset;
         }
 
         public void PutInt(int offset, int value)
@@ -173,7 +203,6 @@ namespace FlatBuffers
                     ? value
                     : ReverseBytes(value);
             }
-            _pos = offset;
         }
 
         public unsafe void PutLong(int offset, long value)
@@ -184,14 +213,12 @@ namespace FlatBuffers
         public unsafe void PutUlong(int offset, ulong value)
         {
             AssertOffsetAndLength(offset, sizeof(ulong));
-
             fixed (byte* ptr = _buffer)
             {
                 *(ulong*)(ptr + offset) = BitConverter.IsLittleEndian
                     ? value
                     : ReverseBytes(value);
             }
-            _pos = offset;
         }
 
         public unsafe void PutFloat(int offset, float value)
@@ -208,7 +235,6 @@ namespace FlatBuffers
                     *(uint*)(ptr + offset) = ReverseBytes(*(uint*)(&value));
                 }
             }
-            _pos = offset;
         }
 
         public unsafe void PutDouble(int offset, double value)
@@ -226,7 +252,6 @@ namespace FlatBuffers
                     *(ulong*)(ptr + offset) = ReverseBytes(*(ulong*)(ptr + offset));
                 }
             }
-            _pos = offset;
         }
 #else // !UNSAFE_BYTEBUFFER
         // Slower versions of Put* for when unsafe code is not allowed.
